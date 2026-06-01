@@ -1,0 +1,13 @@
+ services:
+    app:
+      build: .
+      ports:
+        - "8000:8000"
+      volumes:
+        - .:/app
+        - blog_data:/app/data
+      command: uvicorn blog:app --host 0.0.0.0 --port 8000 --reload
+
+  volumes:
+    blog_data:
+      driver: local
