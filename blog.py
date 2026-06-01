@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
+import os
 from collections import defaultdict
 import time
 from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, DeclarativeBase, Mapped, mapped_column
@@ -35,6 +37,7 @@ class Article(Base):
 Base.metadata.create_all(engine)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
 rate_store = defaultdict(list)
 RATE_LIMIT = 60
 
@@ -86,7 +89,38 @@ def get_current_user(
       return user
 
 
-from fastapi.responses import JSONResponse
+def load_env():
+      env_file = os.path.join(os.path.dirname(__file__), ".env")
+      if os.path.exists(env_file):
+          with open(env_file, encoding="utf-8") as f:
+              for line in f:
+                  line = line.strip()
+                  if line and not line.startswith("#") and "=" in line:
+                      k, v = line.split("=", 1)
+                      os.environ.setdefault(k, v)
+
+load_env()
+
+
+def summarize_with_deepseek(text: str) -> str:
+      import json as _json
+      import requests as _requests
+      api_key = os.getenv("DEEPSEEK_KEY")
+      r = _requests.post(
+          "https://api.deepseek.com/chat/completions",
+          headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+          json={
+              "model": "deepseek-chat",
+              "messages": [
+                  {"role": "system", "content": "用中文一句话总结以下文章内容"},
+                  {"role": "user", "content": text}
+              ],
+              "max_tokens": 100
+          },
+          timeout=30
+      )
+      return r.json()["choices"][0]["message"]["content"].strip()
+
 
 @app.middleware("http")
 async def rate_limit(request: Request, call_next):
@@ -160,3 +194,12 @@ def delete_article(
       db.delete(a)
       db.commit()
       return {"ok": True}
+
+
+@app.post("/articles/{article_id}/summarize")
+def summarize_article(article_id: int, db: Session = Depends(get_db)):
+      a = db.execute(select(Article).where(Article.id == article_id)).scalar_one_or_none()
+      if not a:
+          raise HTTPException(status_code=404, detail="不存在")
+      result = summarize_with_deepseek(a.content)
+      return {"article_id": article_id, "summary": result}
